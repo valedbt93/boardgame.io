@@ -337,6 +337,221 @@ export const addApiToServer = ({
   });
 
   router.post('/games/:name/:id/update', koaBody(), updatePlayerMetadata);
+  
+  // CREATE TEAM specificando numero di team
+  //
+
+  const CreateTeam = async (ctx: Koa.Context) => {
+    const gameID = ctx.params.id;
+    const numOfTeams = ctx.request.body.numOfTeams;
+    const { metadata } = await (db as StorageAPI.Async).fetch(gameID, {
+      metadata: true,
+    });
+
+    if (typeof numOfTeams === 'undefined') {
+      ctx.throw(403, 'Define number of team');
+    }
+    if (!metadata) {
+      ctx.throw(404, 'Game ' + gameID + ' not found');
+    }
+    let playerArray = []
+    let adminArray = []
+    let playerLeaderArray = []
+    //console.log("keys:", Object.keys(metadata.players))
+    for (let id of Object.keys(metadata.players)) {
+      if (metadata.players[id].data.player) {
+        playerArray = [...playerArray, id]
+      }
+      if (metadata.players[id].data.admin) {
+        adminArray = [...adminArray, id]
+      }
+    }
+    //console.log("playerArray:", playerArray)
+    //console.log("adminArray:", adminArray)
+    const numPlayer = playerArray.length
+    let playersInTeam = Math.floor(numPlayer / numOfTeams);
+    const numOfReminder = numPlayer % numOfTeams;
+    /*console.log("numero di giocatori", numPlayer)
+    console.log("numero di team", numOfTeams)
+    console.log("numero non pari", numOfReminder)
+    console.log("numero di giocatori in team", playersInTeam)*/
+
+    let teams = [];
+    let tmp_playerArray = []
+    let playerID = playerArray[0];
+    let teamID = 0;
+
+    for (teamID; teamID < numOfTeams; teamID++) {
+      //console.log("teamID", teamID)
+      let temp_team = {
+        teamID: '',
+        playersID: []
+      };
+      temp_team.teamID = teamID.toString();
+
+      for (let id = 0; id < playersInTeam; id++) {
+        //console.log("playerID", playerID)
+        if (metadata.players[playerID].data.admin) {
+          metadata.players[playerID].data.leader = false
+          playerID++
+        }
+        let temp_teamData = {
+          teamID: '',
+          leader: false
+        }
+        temp_teamData.teamID = teamID.toString();
+        metadata.players[playerID].data.teamData = temp_teamData;
+        metadata.players[playerID].data.leader = false
+        tmp_playerArray = [...tmp_playerArray, playerID]
+        temp_team.playersID = [...temp_team.playersID, playerID.toString()]
+        playerID++
+      }
+      let id_leader = tmp_playerArray[0]
+      metadata.players[id_leader].data.teamData.leader = true;
+      metadata.players[id_leader].data.leader = true;
+      playerLeaderArray = [...playerLeaderArray, id_leader.toString()]
+      teams = [...teams, temp_team];
+      tmp_playerArray = [];
+    }
+
+    if (numOfReminder !== 0) {
+      //console.log("qui")
+      teamID = 0;
+      for (let id = 0; id < numOfReminder; id++) {
+        let temp_teamData = {
+          teamID: '',
+          leader: false
+        }
+        if (metadata.players[playerID].data.admin) {
+          metadata.players[playerID].data.leader = false
+          playerID++
+        }
+        temp_teamData.teamID = teamID.toString();
+        let team = teams.find(team => team.teamID === teamID.toString())
+        metadata.players[playerID].data.teamData = temp_teamData;
+        metadata.players[playerID].data.leader = false
+        team.playersID = [...team.playersID, playerID.toString()]
+        playerID++
+        teamID++
+      }
+    }
+    if (metadata.setupData) {
+      metadata.setupData.teams = teams;
+      metadata.setupData.adminsID = adminArray;
+      metadata.setupData.playersID = playerArray;
+      metadata.setupData.leadersID = playerLeaderArray;
+    }
+
+    await db.setMetadata(gameID, metadata);
+    ctx.body = { teams: teams };
+  };
+
+  router.post('/games/:name/:id/teams/create', koaBody(), CreateTeam);
+
+
+  // UPDATE LEADER
+  //
+  const UpdateLeader = async (ctx: Koa.Context) => {
+    const gameID = ctx.params.id;
+    //const teamID = ctx.request.body.teamID;
+    const teamID = ctx.params.team;
+    const { metadata } = await (db as StorageAPI.Async).fetch(gameID, {
+      metadata: true,
+    });
+
+    if (typeof teamID === 'undefined') {
+      ctx.throw(403, 'Select the team to update');
+    }
+    if (!metadata) {
+      ctx.throw(404, 'Game ' + gameID + ' not found');
+    }
+    if (metadata.setupData) {
+      const team = metadata.setupData.teams.find(team => team.teamID === teamID)
+      if (typeof team === 'undefined') {
+        ctx.throw(404, 'Team ' + teamID + ' not found');
+      }
+    }
+
+    const playerID_array = Object.keys(metadata.players);
+    let playerID_oldLeader = '';
+    let playerID_others = [];
+
+    for (let playerID of playerID_array) {
+      console.log
+      if (metadata.players[playerID].data.hasOwnProperty('teamData'))
+        if (metadata.players[playerID].data.teamData.teamID === teamID) {
+          if (metadata.players[playerID].data.teamData.leader) {
+            playerID_oldLeader = playerID;
+          } else {
+            playerID_others = [...playerID_others, playerID]
+          }
+        }
+    }
+    if (playerID_others.length > 0) {
+      const playerID_newLeader = playerID_others[Math.floor(Math.random() * playerID_others.length)];
+      metadata.players[playerID_newLeader].data.teamData.leader = true;
+      metadata.players[playerID_newLeader].data.leader = true
+      metadata.players[playerID_oldLeader].data.teamData.leader = false;
+      metadata.players[playerID_oldLeader].data.leader = false
+
+      let leadersID_array = metadata.setupData.leadersID
+
+      let index_old = leadersID_array.indexOf(playerID_oldLeader)
+
+      if (index_old !== -1) {
+          leadersID_array[index_old] = playerID_newLeader;
+      }
+
+      await db.setMetadata(gameID, metadata);
+
+      ctx.body = {
+        playerName_newLeader: metadata.players[playerID_newLeader].name,
+        playerID_newLeader: playerID_newLeader,
+        new_leadersID: leadersID_array,
+        new_players: metadata.players
+      };
+    } else {
+      console.log("only one player in team " + teamID)
+    }
+  };
+
+  router.post('/games/:name/:id/teams/update/leader/:team', koaBody(), UpdateLeader);
+
+  // REJOIN GAME
+  //
+  const RejoinGame = async ctx => {
+    const playerName = ctx.request.body.playerName;
+    const credentials = ctx.request.body.credentials;
+    const gameID = ctx.params.id;
+    const { metadata } = await (db as StorageAPI.Async).fetch(gameID, {
+      metadata: true,
+    });
+
+    if (!playerName) {
+      ctx.throw(403, 'playerName is required');
+    }
+    if (!metadata) {
+      ctx.throw(404, 'Game ' + gameID + ' not found');
+    }
+
+    const playerID_array = Object.keys(metadata.players);
+    const playerID = playerID_array.find(id => metadata.players[id].name === playerName)
+
+    if (typeof playerID === 'undefined') {
+      ctx.throw(409, 'Player not available');
+    }
+    if (credentials !== metadata.players[playerID].credentials) {
+      ctx.throw(403, 'Invalid credentials ' + credentials);
+    }
+
+    await db.setMetadata(gameID, metadata);
+    ctx.body = {
+      rejoined: true
+    };
+  }
+
+  router.post('/games/:name/:id/rejoin', koaBody(), RejoinGame);
+  //
 
   app.use(cors());
 
